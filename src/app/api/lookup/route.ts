@@ -6,7 +6,7 @@ export const dynamic = 'force-dynamic';
 
 const CODE_RE = /^[A-Za-z0-9_-]{4,64}$/;
 
-const NOT_FOUND_MSG = "We couldn't find a reservation with that code. Double-check and try again.";
+const NOT_FOUND_MSG = "We couldn't find that reservation. Double-check the code and try again.";
 
 export async function POST(req: Request) {
   let body: { code?: string };

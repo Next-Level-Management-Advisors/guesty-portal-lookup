@@ -1,23 +1,55 @@
 import LookupForm from './LookupForm';
+import { brand } from '@/lib/brand';
 
-const SITE_NAME = process.env.NEXT_PUBLIC_SITE_NAME ?? 'Guest Portal';
+function CheckIcon() {
+  return (
+    <svg
+      className="mt-0.5 h-4 w-4 flex-none text-accent"
+      viewBox="0 0 20 20"
+      fill="none"
+      aria-hidden="true"
+    >
+      <path
+        d="M4 10.5l3.5 3.5L16 5.5"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
 
 export default function Page() {
   return (
-    <article className="w-full max-w-md px-4 sm:px-6 py-16">
-      <h1 className="text-3xl font-semibold tracking-tight">Find your trip</h1>
-      <p className="mt-3 text-ink-muted leading-relaxed">
-        Enter the confirmation code from your booking. We&rsquo;ll send you straight to your guest
-        portal — check-in details, messaging, and trip info.
-      </p>
+    <section className="w-full max-w-xl px-6 py-12 sm:py-20">
+      <div className="text-center sm:text-left">
+        <h1 className="text-4xl sm:text-5xl font-semibold tracking-tight text-ink leading-[1.1]">
+          {brand.headline}
+        </h1>
+        <p className="mt-4 text-base sm:text-lg text-ink-muted leading-relaxed max-w-md sm:max-w-none mx-auto">
+          {brand.subhead}
+        </p>
+      </div>
 
-      <div className="mt-8 rounded-2xl border border-border bg-surface p-6">
+      <div className="mt-10 rounded-3xl border border-border bg-surface p-6 sm:p-8 shadow-[var(--shadow-card)] hover:shadow-[var(--shadow-card-hover)] transition-shadow">
         <LookupForm />
       </div>
 
-      <p className="mt-8 text-xs text-ink-muted text-center">
-        {SITE_NAME}
-      </p>
-    </article>
+      <ul className="mt-10 space-y-2.5 text-sm text-ink-muted">
+        <li className="flex items-start gap-3">
+          <CheckIcon />
+          <span>Works with any booking — Airbnb, Vrbo, Booking.com, or direct.</span>
+        </li>
+        <li className="flex items-start gap-3">
+          <CheckIcon />
+          <span>Your code stays on your device. We don&rsquo;t store it.</span>
+        </li>
+        <li className="flex items-start gap-3">
+          <CheckIcon />
+          <span>One click takes you to the same portal your host links to.</span>
+        </li>
+      </ul>
+    </section>
   );
 }

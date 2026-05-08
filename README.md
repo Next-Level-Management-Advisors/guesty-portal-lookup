@@ -61,6 +61,30 @@ Optional (failover):
 | `GUESTY_OPEN_API_CLIENT_ID_2` | A second Open API integration |
 | `GUESTY_OPEN_API_CLIENT_SECRET_2` | A second Open API integration |
 
+### Branding (optional)
+
+Every NEXT_PUBLIC_* var below is optional with a sensible default — set only what you want to override, then rebuild.
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `NEXT_PUBLIC_SITE_NAME` | `Guest Portal` | Used in `<title>` and footer |
+| `NEXT_PUBLIC_SITE_URL` | `http://localhost:3000` | Canonical URL for metadata |
+| `NEXT_PUBLIC_LOGO_URL` | `/logo.svg` | The repo ships a bundled `public/logo.svg`. Override with a path or absolute URL, or set to `none` to hide the logo entirely. |
+| `NEXT_PUBLIC_FAVICON_URL` | `/favicon.svg` | The repo ships a generic `public/favicon.svg`. Drop your own at `public/favicon.svg` (or any path) and point this here. |
+| `NEXT_PUBLIC_ACCENT_COLOR` | `#111111` | Submit button / focus ring |
+| `NEXT_PUBLIC_ACCENT_HOVER_COLOR` | `#000000` | |
+| `NEXT_PUBLIC_ACCENT_INK` | `#ffffff` | Text color drawn on top of the accent |
+| `NEXT_PUBLIC_HEADLINE` | `Find your trip` | |
+| `NEXT_PUBLIC_SUBHEAD` | _(see .env.example)_ | |
+| `NEXT_PUBLIC_INPUT_LABEL` | `Confirmation code` | |
+| `NEXT_PUBLIC_INPUT_PLACEHOLDER` | `e.g. HMABCD12345` | |
+| `NEXT_PUBLIC_SUBMIT_LABEL` | `Find my reservation` | |
+| `NEXT_PUBLIC_SUBMIT_LOADING_LABEL` | `Looking up…` | |
+| `NEXT_PUBLIC_HELPER_TEXT` | _(see .env.example)_ | |
+| `NEXT_PUBLIC_SUPPORT_URL` | _none_ | If set, the footer site-name becomes a link to this URL |
+
+These are read in one place — [`src/lib/brand.ts`](src/lib/brand.ts) — so a fork that wants opinionated defaults can just edit that file instead of setting env vars.
+
 ### 4. Run locally
 
 ```bash
