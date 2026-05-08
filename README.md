@@ -118,6 +118,25 @@ DOMAIN=portal.example.com bash /opt/guesty-portal-lookup/deploy/vps-bootstrap.sh
 
 The bootstrap script installs deps, builds, registers a systemd service on port 3014, configures nginx, and runs certbot for a Let's Encrypt cert.
 
+**Multiple domains on one cert.** To add aliases (e.g. a memorable second URL like `stay.example.com`), set `EXTRA_DOMAINS`:
+
+```bash
+DOMAIN=portal.example.com EXTRA_DOMAINS=stay.example.com \
+  bash /opt/guesty-portal-lookup/deploy/vps-bootstrap.sh
+```
+
+The alias gets added as a SAN on the same cert and the same nginx vhost; both URLs serve the app.
+
+**ACME challenge: HTTP-01 with DNS-01 fallback.** The script tries HTTP-01 (webroot) first. If your VPS provider intermittently drops port-80 traffic from Let's Encrypt validators (Hostinger SDN does this — observed when expanding to add an alias), set `HOSTINGER_API_TOKEN` and the script falls back to DNS-01 via Hostinger's DNS API:
+
+```bash
+HOSTINGER_API_TOKEN=hap_xxx... DOMAIN=portal.example.com \
+  EXTRA_DOMAINS=stay.example.com \
+  bash /opt/guesty-portal-lookup/deploy/vps-bootstrap.sh
+```
+
+Get a token at hpanel.hostinger.com → Account → API. DNS scope is sufficient.
+
 ## Token caching
 
 Open API tokens are cached in memory and on disk (`os.tmpdir()/guesty-open-api-token-<clientId>.json`). This lets the app survive a restart without burning a fresh token issuance against the 3/day limit.
