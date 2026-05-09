@@ -15,6 +15,9 @@ const TOKEN_URL = 'https://open-api.guesty.com/oauth2/token';
 const API_BASE = 'https://open-api.guesty.com/v1';
 const SCOPE = 'open-api';
 
+const GUEST_APP_AUTH_URL = 'https://guest-app.guesty.com/api/public/guest-app-auth';
+const GUEST_APP_RUNTIME_URL = 'https://guest-app.guesty.com/api/public/guest-app-runtime';
+
 type TokenCache = { access_token: string; expires_at: number; client_id: string };
 type Credential = { id: string; secret: string; label: 'primary' | 'secondary' };
 
@@ -25,6 +28,18 @@ export class GuestyError extends Error {
     super(message);
     this.status = status;
     this.body = body;
+  }
+}
+
+/**
+ * Thrown when Guesty's guest-app accepts the URL identifier but the
+ * per-reservation runtime hasn't been published — the guest would land on
+ * the "this page is on vacation" page. We surface this as a distinct error
+ * so /api/lookup can return a clear message instead of redirecting.
+ */
+export class GuestAppNotProvisionedError extends Error {
+  constructor(message = 'guest-app token not yet provisioned for this reservation') {
+    super(message);
   }
 }
 
@@ -175,4 +190,64 @@ export async function findReservationByCode(code: string): Promise<Reservation |
   }
   const data = (await res.json()) as { results?: Reservation[]; data?: Reservation[] };
   return (data.results ?? data.data ?? [])[0] ?? null;
+}
+
+/**
+ * Resolve the `dynamicVar` token used by Guesty's guest-app for a given
+ * reservation, and verify the guest-app runtime is actually live before
+ * returning. Mirrors what the guest-app SPA does on page load:
+ *
+ *   1. POST /api/public/guest-app-auth/login {reservationId, dynamicVar}
+ *      Guesty maps `dynamicVar` to a configured guest-app instance for
+ *      this account and mints a short-lived JWT bearing the resolved
+ *      guestAppId. A 404 here means no guest-app is wired up for this
+ *      account/identifier.
+ *   2. GET  /api/public/guest-app-runtime/initial-data/<id>/<dynamicVar>
+ *      Confirms a publishable runtime exists for this reservation. A 404
+ *      ("Guest app runtime not found") is what produces the "page is on
+ *      vacation" page in the SPA — we want to fail closed before redirect.
+ *
+ * Returns the verified `dynamicVar` (caller embeds it in the URL).
+ * Throws `GuestAppNotProvisionedError` for the runtime-missing case so
+ * /api/lookup can surface a distinct, host-actionable message.
+ */
+export async function resolveGuestAppToken(
+  reservationId: string,
+  accountSlug: string,
+): Promise<string> {
+  const dynamicVar = Buffer.from(`{{guest_app::${accountSlug}}}`).toString('base64');
+
+  const loginRes = await fetch(`${GUEST_APP_AUTH_URL}/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reservationId, dynamicVar }),
+    cache: 'no-store',
+  });
+  if (!loginRes.ok) {
+    if (loginRes.status === 404) throw new GuestAppNotProvisionedError();
+    const body = await loginRes.text();
+    throw new GuestyError(loginRes.status, body, `Guesty guest-app /login -> ${loginRes.status}`);
+  }
+  const loginJson = (await loginRes.json()) as { token?: string };
+  const jwt = loginJson.token;
+  if (!jwt) throw new GuestAppNotProvisionedError();
+
+  const runtimeUrl = `${GUEST_APP_RUNTIME_URL}/initial-data/${encodeURIComponent(
+    reservationId,
+  )}/${encodeURIComponent(dynamicVar)}`;
+  const runtimeRes = await fetch(runtimeUrl, {
+    headers: { Authorization: `Bearer ${jwt}`, Accept: 'application/json' },
+    cache: 'no-store',
+  });
+  if (runtimeRes.status === 404) throw new GuestAppNotProvisionedError();
+  if (!runtimeRes.ok) {
+    const body = await runtimeRes.text();
+    throw new GuestyError(
+      runtimeRes.status,
+      body,
+      `Guesty guest-app /initial-data -> ${runtimeRes.status}`,
+    );
+  }
+
+  return dynamicVar;
 }

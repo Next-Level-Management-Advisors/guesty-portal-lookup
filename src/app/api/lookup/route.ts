@@ -1,12 +1,19 @@
 import { NextResponse } from 'next/server';
-import { findReservationByCode, GuestyError } from '@/lib/guesty';
-import { buildGuestAppUrl } from '@/lib/guest-app-url';
+import {
+  findReservationByCode,
+  resolveGuestAppToken,
+  GuestyError,
+  GuestAppNotProvisionedError,
+} from '@/lib/guesty';
+import { buildGuestAppUrl, isResolvedGuestAppUrl } from '@/lib/guest-app-url';
 
 export const dynamic = 'force-dynamic';
 
 const CODE_RE = /^[A-Za-z0-9_-]{4,64}$/;
 
 const NOT_FOUND_MSG = "We couldn't find that reservation. Double-check the code and try again.";
+const NOT_PROVISIONED_MSG =
+  "We found your reservation, but your guest portal isn't ready yet. Please contact your host to publish the guest app for this stay.";
 
 export async function POST(req: Request) {
   let body: { code?: string };
@@ -35,8 +42,20 @@ export async function POST(req: Request) {
     if (!reservation || !id) {
       return NextResponse.json({ ok: false, error: NOT_FOUND_MSG }, { status: 404 });
     }
-    return NextResponse.json({ ok: true, url: buildGuestAppUrl(id, accountSlug) });
+
+    const dynamicVar = await resolveGuestAppToken(id, accountSlug);
+    const url = buildGuestAppUrl(id, dynamicVar);
+
+    if (!isResolvedGuestAppUrl(url)) {
+      console.error('lookup produced an unresolved guest-app URL', { reservationId: id });
+      return NextResponse.json({ ok: false, error: NOT_PROVISIONED_MSG }, { status: 503 });
+    }
+
+    return NextResponse.json({ ok: true, url });
   } catch (e) {
+    if (e instanceof GuestAppNotProvisionedError) {
+      return NextResponse.json({ ok: false, error: NOT_PROVISIONED_MSG }, { status: 503 });
+    }
     console.error('lookup failed', e);
     if (e instanceof GuestyError && (e.status === 404 || e.status === 410 || e.status === 400)) {
       return NextResponse.json({ ok: false, error: NOT_FOUND_MSG }, { status: 404 });

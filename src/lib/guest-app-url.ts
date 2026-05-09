@@ -1,21 +1,47 @@
 /**
- * Build the Guesty Guest App URL for a reservation.
+ * Build and validate the Guesty Guest App URL for a reservation.
  *
- * Format observed in the wild:
- *   https://guest-app.guesty.com/r/<reservationId>/<base64>
+ * URL shape:
+ *   https://guest-app.guesty.com/r/<reservationId>/<dynamicVar>
  *
- * where <base64> is the base64-encoded merge tag string
- *   {{guest_app::<accountSlug>}}
- *
- * The <accountSlug> is your Guesty account name lowercased with spaces
- * replaced by underscores. Find it by inspecting any saved-reply or sent
- * email containing the {{guest_app::...}} merge tag in your Guesty account.
- *
- * Note: Guesty gates portal access by stay-window — reservations with
- * check-in more than ~7 days in the future render an "on vacation" page.
- * That's a Guesty-side check, not a URL construction issue.
+ * `dynamicVar` is the per-account token Guesty's guest-app uses to look up
+ * the active guest-app instance during /api/public/guest-app-auth/login.
+ * It must come from `resolveGuestAppToken()` in `guesty.ts` — never from a
+ * raw base64 of the literal `{{guest_app::<slug>}}` merge tag (that was
+ * the source of the "page is on vacation" bug: the SPA's /login accepts it
+ * but /initial-data 404s when no guest-app runtime is provisioned, and
+ * we want to fail closed in our own /api/lookup before redirecting).
  */
-export function buildGuestAppUrl(reservationId: string, accountSlug: string): string {
-  const tag = Buffer.from(`{{guest_app::${accountSlug}}}`).toString('base64');
-  return `https://guest-app.guesty.com/r/${encodeURIComponent(reservationId)}/${tag}`;
+export const GUEST_APP_HOST = 'https://guest-app.guesty.com';
+
+export function buildGuestAppUrl(reservationId: string, dynamicVar: string): string {
+  return `${GUEST_APP_HOST}/r/${encodeURIComponent(reservationId)}/${encodeURIComponent(dynamicVar)}`;
+}
+
+/**
+ * Decode the base64 trailing segment of a guest-app URL. Returns null if
+ * the URL doesn't match the expected shape or the segment isn't valid base64.
+ */
+export function decodeTrailingToken(url: string): string | null {
+  try {
+    const u = new URL(url);
+    const parts = u.pathname.split('/').filter(Boolean);
+    if (parts.length < 3 || parts[0] !== 'r') return null;
+    const tail = decodeURIComponent(parts[parts.length - 1]);
+    return Buffer.from(tail, 'base64').toString('utf8');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Sanity guard: a finished URL whose trailing segment base64-decodes to a
+ * value containing `{{` or `}}` is an unresolved merge tag — exactly the
+ * regression we just fixed. Returns true if the URL is safe to hand to a
+ * guest, false if it looks like a template literal slipped through.
+ */
+export function isResolvedGuestAppUrl(url: string): boolean {
+  const decoded = decodeTrailingToken(url);
+  if (decoded === null) return false;
+  return !decoded.includes('{{') && !decoded.includes('}}');
 }
