@@ -5,7 +5,7 @@ import {
   GuestyError,
   GuestAppNotProvisionedError,
 } from '@/lib/guesty';
-import { buildGuestAppUrl, isResolvedGuestAppUrl } from '@/lib/guest-app-url';
+import { buildGuestAppUrl } from '@/lib/guest-app-url';
 
 export const dynamic = 'force-dynamic';
 
@@ -45,12 +45,6 @@ export async function POST(req: Request) {
 
     const dynamicVar = await resolveGuestAppToken(id, accountSlug);
     const url = buildGuestAppUrl(id, dynamicVar);
-
-    if (!isResolvedGuestAppUrl(url)) {
-      console.error('lookup produced an unresolved guest-app URL', { reservationId: id });
-      return NextResponse.json({ ok: false, error: NOT_PROVISIONED_MSG }, { status: 503 });
-    }
-
     return NextResponse.json({ ok: true, url });
   } catch (e) {
     if (e instanceof GuestAppNotProvisionedError) {
