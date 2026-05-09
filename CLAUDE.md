@@ -23,11 +23,12 @@ Single-purpose Next.js 16 (App Router, React 19) app: a guest enters a Guesty re
    - **Failover across credential pairs.** If `GUESTY_OPEN_API_CLIENT_ID_2` / `_SECRET_2` are set, `getToken()` falls through to the secondary pair on 401/403/429 from the primary. Other errors do not fall through. This is why `GuestyError` carries `status` — the fallthrough logic depends on it.
    - Reservation lookup uses `filters=[{field:'confirmationCode',operator:'$eq',value:code}]`. **Do not switch to `q=`** — that endpoint is fuzzy and surfaces unrelated codes.
 
-2. **[src/lib/guest-app-url.ts](src/lib/guest-app-url.ts)** — Builds the Guest App URL as `https://guest-app.guesty.com/r/<reservationId>/<base64({{guest_app::<accountSlug>}})>`. The base64'd merge tag is not secret; Guesty validates the URL on its side using the stay window. Stays >~7 days out render Guesty's "this page is on vacation" page — that gate lives at `guest-app.guesty.com` and cannot be bypassed from the URL.
+2. **[src/lib/guest-app-url.ts](src/lib/guest-app-url.ts) + `resolveGuestAppToken` in [src/lib/guesty.ts](src/lib/guesty.ts)** — Builds the Guest App URL as `https://guest-app.guesty.com/r/<reservationId>/<dynamicVar>`. `dynamicVar` is `base64({{guest_app::<accountSlug>}})` — the literal merge tag, not secret. Despite the function name, `resolveGuestAppToken` does NOT swap in a different value; it computes the merge-tag form and **pre-verifies** it against Guesty's `/api/public/guest-app-auth/login` (mints a JWT) and `/api/public/guest-app-runtime/initial-data/<id>/<dynamicVar>` (confirms a published runtime). A 404 from either becomes `GuestAppNotProvisionedError`, which `/api/lookup` surfaces as a host-actionable message instead of redirecting the guest to the "this page is on vacation" SPA page. Stays >~7 days out still render that page — that gate is server-side at `guest-app.guesty.com` and can't be bypassed from the URL.
+   - **Don't `encodeURIComponent` the trailing `dynamicVar`.** Guesty's guest-app SPA reads the path segment verbatim (no URL-decoding) and posts it as the JSON `dynamicVar` to `/api/public/guest-app-auth/login`. If we encode the `==` padding to `%3D%3D`, the API sees a literal `%3D%3D` suffix, doesn't match any provisioned guest-app, and 404s with `"Guest app not found"` — the page renders empty. Server-to-server calls from `/api/lookup` happen to work either way (we send raw bytes), so this only breaks the browser path. Emit base64 chars (`A-Za-z0-9+/=`) raw in the path.
 
-3. **[src/app/api/lookup/route.ts](src/app/api/lookup/route.ts)** — POST endpoint. Validates the code against `/^[A-Za-z0-9_-]{4,64}$/`, looks up the reservation, returns `{ ok, url }` or `{ ok: false, error }`. **Auth model:** possession of the confirmation code is treated as authorization (same trust model Guesty uses for its emailed magic links). Don't add a separate auth layer. Don't log the code or PII — only `console.error` for unexpected exceptions.
+3. **[src/app/api/lookup/route.ts](src/app/api/lookup/route.ts)** — POST endpoint. Validates the code against `/^[A-Za-z0-9_-]{4,64}$/`, looks up the reservation, calls `resolveGuestAppToken`, returns `{ ok, url }` or `{ ok: false, error }`. **Auth model:** possession of the confirmation code is treated as authorization (same trust model Guesty uses for its emailed magic links). Don't add a separate auth layer. Don't log the code or PII — only `console.error` for unexpected exceptions.
 
-The client (`src/app/LookupForm.tsx`) is a thin form that POSTs to `/api/lookup` and does `window.location.href = data.url` on success.
+The client ([src/app/LookupForm.tsx](src/app/LookupForm.tsx)) is a thin form that POSTs to `/api/lookup` and does `window.location.href = data.url` on success. It also auto-submits when the URL has a `?code=<...>` query param (matching `CODE_RE`), rendering an "Opening your trip…" spinner — this is the flow used by the in-Guesty saved reply (`https://portal.fidumcompany.com/?code={{reservation.confirmationCode}}`), so don't break that contract.
 
 ## Environment
 
@@ -53,8 +54,10 @@ Adding a new brand knob = (1) add the field + default in `brand.ts`, (2) consume
 For the self-hosted VPS deploy (production at `portal.fidumcompany.com`):
 
 - `deploy/rsync-up.sh` rsyncs (or tars) the repo to `/opt/guesty-portal-lookup` on `root@178.16.141.166`. Excludes `.next`, `node_modules`, `.git`, `.env.local`.
-- `deploy/vps-bootstrap.sh` runs on the VPS: `npm ci && npm run build`, writes a systemd unit on **port 3014**, configures nginx vhost, runs certbot. Idempotent.
+- `deploy/vps-bootstrap.sh` runs on the VPS: `npm ci && npm run build`, writes a systemd unit on **port 3014**, configures nginx vhost, runs certbot (HTTP-01 with DNS-01 fallback via `HOSTINGER_API_TOKEN`, supports `EXTRA_DOMAINS` for SAN aliases). Idempotent.
 - `.env.local` is **not** in git — scp it up separately before bootstrap.
+
+`scripts/backfill-portal-url.py` is a one-off helper that pushes the portal URL onto existing Guesty reservations as a custom field; not part of the runtime app.
 
 ## Conventions
 

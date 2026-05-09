@@ -15,7 +15,14 @@
 export const GUEST_APP_HOST = 'https://guest-app.guesty.com';
 
 export function buildGuestAppUrl(reservationId: string, dynamicVar: string): string {
-  return `${GUEST_APP_HOST}/r/${encodeURIComponent(reservationId)}/${encodeURIComponent(dynamicVar)}`;
+  // dynamicVar is base64 (may contain `=` padding). DO NOT encodeURIComponent it:
+  // Guesty's guest-app SPA reads the trailing path segment without URL-decoding
+  // and posts it verbatim to /api/public/guest-app-auth/login as the JSON
+  // `dynamicVar` field. Encoding `==` to `%3D%3D` makes the API see a literal
+  // `%3D%3D` suffix, which doesn't match any provisioned guest-app and returns
+  // 404 "Guest app not found". Base64 chars (A-Z a-z 0-9 + / =) are safe in a
+  // URL path segment in practice, so emit them raw.
+  return `${GUEST_APP_HOST}/r/${encodeURIComponent(reservationId)}/${dynamicVar}`;
 }
 
 /**
