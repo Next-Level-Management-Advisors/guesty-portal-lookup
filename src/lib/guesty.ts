@@ -37,11 +37,29 @@ export class GuestyError extends Error {
  * the "this page is on vacation" page. We surface this as a distinct error
  * so /api/lookup can return a clear message instead of redirecting.
  */
+export type GuestAppNotProvisionedReason = 'too-far-out' | 'unpublished';
+
 export class GuestAppNotProvisionedError extends Error {
-  constructor(message = 'guest-app token not yet provisioned for this reservation') {
+  reason: GuestAppNotProvisionedReason;
+  checkIn?: string;
+  constructor(
+    reason: GuestAppNotProvisionedReason = 'unpublished',
+    checkIn?: string,
+    message = 'guest-app token not yet provisioned for this reservation',
+  ) {
     super(message);
+    this.reason = reason;
+    this.checkIn = checkIn;
   }
 }
+
+/**
+ * Guesty publishes the per-reservation guest-app runtime ~7 days before
+ * check-in. Anything further out gets a 404 from /initial-data even though
+ * /login succeeds. We use this window to distinguish the time-gate case
+ * (host can't fix) from a genuinely unpublished guest-app (host can fix).
+ */
+const GUEST_APP_PUBLISH_WINDOW_DAYS = 7;
 
 function getCredentials(): Credential[] {
   const creds: Credential[] = [];
@@ -214,8 +232,17 @@ export async function findReservationByCode(code: string): Promise<Reservation |
 export async function resolveGuestAppToken(
   reservationId: string,
   accountSlug: string,
+  checkIn?: string,
 ): Promise<string> {
   const dynamicVar = Buffer.from(`{{guest_app::${accountSlug}}}`).toString('base64');
+
+  const reasonForCheckIn = (): GuestAppNotProvisionedReason => {
+    if (!checkIn) return 'unpublished';
+    const t = Date.parse(checkIn);
+    if (Number.isNaN(t)) return 'unpublished';
+    const daysOut = (t - Date.now()) / 86_400_000;
+    return daysOut > GUEST_APP_PUBLISH_WINDOW_DAYS ? 'too-far-out' : 'unpublished';
+  };
 
   const loginRes = await fetch(`${GUEST_APP_AUTH_URL}/login`, {
     method: 'POST',
@@ -224,13 +251,13 @@ export async function resolveGuestAppToken(
     cache: 'no-store',
   });
   if (!loginRes.ok) {
-    if (loginRes.status === 404) throw new GuestAppNotProvisionedError();
+    if (loginRes.status === 404) throw new GuestAppNotProvisionedError(reasonForCheckIn(), checkIn);
     const body = await loginRes.text();
     throw new GuestyError(loginRes.status, body, `Guesty guest-app /login -> ${loginRes.status}`);
   }
   const loginJson = (await loginRes.json()) as { token?: string };
   const jwt = loginJson.token;
-  if (!jwt) throw new GuestAppNotProvisionedError();
+  if (!jwt) throw new GuestAppNotProvisionedError(reasonForCheckIn(), checkIn);
 
   const runtimeUrl = `${GUEST_APP_RUNTIME_URL}/initial-data/${encodeURIComponent(
     reservationId,
@@ -239,7 +266,7 @@ export async function resolveGuestAppToken(
     headers: { Authorization: `Bearer ${jwt}`, Accept: 'application/json' },
     cache: 'no-store',
   });
-  if (runtimeRes.status === 404) throw new GuestAppNotProvisionedError();
+  if (runtimeRes.status === 404) throw new GuestAppNotProvisionedError(reasonForCheckIn(), checkIn);
   if (!runtimeRes.ok) {
     const body = await runtimeRes.text();
     throw new GuestyError(

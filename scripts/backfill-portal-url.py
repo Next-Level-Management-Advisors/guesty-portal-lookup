@@ -6,14 +6,14 @@ Usage:
 
 Reads token from one of the cached files written by the portal-lookup app.
 """
-import json, os, sys, time, urllib.parse, urllib.request, urllib.error
+import glob, json, os, sys, tempfile, time, urllib.parse, urllib.request, urllib.error
 
 FIELD_ID = "69fd754641a994001af0a67b"
 BASE = "https://open-api.guesty.com/v1"
-TOKEN_FILES = [
-    "/tmp/guesty-open-api-token-0oaui7nk0rHKfWH6K5d7.json",
-    "/tmp/guesty-open-api-token-0oaui7vi89mEI6EPV5d7.json",
-]
+TOKEN_FILES = sorted(
+    glob.glob(os.path.join(tempfile.gettempdir(), "guesty-open-api-token-*.json"))
+    + glob.glob("/tmp/guesty-open-api-token-*.json")
+)
 
 
 def get_token():
