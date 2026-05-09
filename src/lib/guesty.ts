@@ -32,34 +32,14 @@ export class GuestyError extends Error {
 }
 
 /**
- * Thrown when Guesty's guest-app accepts the URL identifier but the
- * per-reservation runtime hasn't been published — the guest would land on
- * the "this page is on vacation" page. We surface this as a distinct error
- * so /api/lookup can return a clear message instead of redirecting.
+ * Thrown when Guesty's guest-app /initial-data 404s after we've already
+ * tried to publish the runtime by posting the merge-tag note.
  */
-export type GuestAppNotProvisionedReason = 'too-far-out' | 'unpublished';
-
 export class GuestAppNotProvisionedError extends Error {
-  reason: GuestAppNotProvisionedReason;
-  checkIn?: string;
-  constructor(
-    reason: GuestAppNotProvisionedReason = 'unpublished',
-    checkIn?: string,
-    message = 'guest-app token not yet provisioned for this reservation',
-  ) {
+  constructor(message = 'guest-app runtime not provisioned for this reservation') {
     super(message);
-    this.reason = reason;
-    this.checkIn = checkIn;
   }
 }
-
-/**
- * Guesty publishes the per-reservation guest-app runtime ~7 days before
- * check-in. Anything further out gets a 404 from /initial-data even though
- * /login succeeds. We use this window to distinguish the time-gate case
- * (host can't fix) from a genuinely unpublished guest-app (host can fix).
- */
-const GUEST_APP_PUBLISH_WINDOW_DAYS = 7;
 
 function getCredentials(): Credential[] {
   const creds: Credential[] = [];
@@ -211,70 +191,124 @@ export async function findReservationByCode(code: string): Promise<Reservation |
 }
 
 /**
- * Resolve the `dynamicVar` token used by Guesty's guest-app for a given
- * reservation, and verify the guest-app runtime is actually live before
- * returning. Mirrors what the guest-app SPA does on page load:
- *
- *   1. POST /api/public/guest-app-auth/login {reservationId, dynamicVar}
- *      Guesty maps `dynamicVar` to a configured guest-app instance for
- *      this account and mints a short-lived JWT bearing the resolved
- *      guestAppId. A 404 here means no guest-app is wired up for this
- *      account/identifier.
- *   2. GET  /api/public/guest-app-runtime/initial-data/<id>/<dynamicVar>
- *      Confirms a publishable runtime exists for this reservation. A 404
- *      ("Guest app runtime not found") is what produces the "page is on
- *      vacation" page in the SPA — we want to fail closed before redirect.
- *
- * Returns the verified `dynamicVar` (caller embeds it in the URL).
- * Throws `GuestAppNotProvisionedError` for the runtime-missing case so
- * /api/lookup can surface a distinct, host-actionable message.
+ * Find the conversation for a reservation. Returns the conversationId or
+ * null if none exists (rare — typically only HOST-... reservations created
+ * without a guest channel).
  */
-export async function resolveGuestAppToken(
-  reservationId: string,
-  accountSlug: string,
-  checkIn?: string,
-): Promise<string> {
-  const dynamicVar = Buffer.from(`{{guest_app::${accountSlug}}}`).toString('base64');
+async function findConversationForReservation(reservationId: string): Promise<string | null> {
+  const token = await getToken();
+  const url = new URL(`${API_BASE}/communication/conversations`);
+  url.searchParams.set(
+    'filters',
+    JSON.stringify([{ field: 'reservation._id', operator: '$eq', value: reservationId }]),
+  );
+  url.searchParams.set('limit', '1');
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+    cache: 'no-store',
+  });
+  if (!res.ok) return null;
+  const data = (await res.json()) as { data?: { conversations?: Array<{ _id: string }> } };
+  return data.data?.conversations?.[0]?._id ?? null;
+}
 
-  const reasonForCheckIn = (): GuestAppNotProvisionedReason => {
-    if (!checkIn) return 'unpublished';
-    const t = Date.parse(checkIn);
-    if (Number.isNaN(t)) return 'unpublished';
-    const daysOut = (t - Date.now()) / 86_400_000;
-    return daysOut > GUEST_APP_PUBLISH_WINDOW_DAYS ? 'too-far-out' : 'unpublished';
-  };
+/**
+ * Trigger Guesty to publish the guest-app runtime for a reservation by
+ * posting an internal `module.type: "note"` post containing the literal
+ * `{{guest_app::<slug>}}` merge tag. Guesty renders the tag server-side,
+ * and as a side effect publishes the runtime — typically within ~15s.
+ * The note is internal-only; guests never see it.
+ *
+ * Idempotent: posting the note again on an already-published reservation
+ * just adds another internal note entry, no harm done.
+ */
+async function publishGuestAppRuntime(reservationId: string, accountSlug: string): Promise<void> {
+  const conversationId = await findConversationForReservation(reservationId);
+  if (!conversationId) return; // nothing to do
+  const token = await getToken();
+  await fetch(
+    `${API_BASE}/communication/conversations/${conversationId}/send-message`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        body: `{{guest_app::${accountSlug}}}`,
+        module: { type: 'note' },
+      }),
+      cache: 'no-store',
+    },
+  );
+  // Don't throw on non-OK — we'll observe the result via the runtime retry.
+}
 
-  const loginRes = await fetch(`${GUEST_APP_AUTH_URL}/login`, {
+const RUNTIME_RETRY_DELAYS_MS = [3_000, 5_000, 7_000];
+
+async function loginToGuestApp(reservationId: string, dynamicVar: string): Promise<string | null> {
+  const res = await fetch(`${GUEST_APP_AUTH_URL}/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ reservationId, dynamicVar }),
     cache: 'no-store',
   });
-  if (!loginRes.ok) {
-    if (loginRes.status === 404) throw new GuestAppNotProvisionedError(reasonForCheckIn(), checkIn);
-    const body = await loginRes.text();
-    throw new GuestyError(loginRes.status, body, `Guesty guest-app /login -> ${loginRes.status}`);
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    const body = await res.text();
+    throw new GuestyError(res.status, body, `Guesty guest-app /login -> ${res.status}`);
   }
-  const loginJson = (await loginRes.json()) as { token?: string };
-  const jwt = loginJson.token;
-  if (!jwt) throw new GuestAppNotProvisionedError(reasonForCheckIn(), checkIn);
+  const json = (await res.json()) as { token?: string };
+  return json.token ?? null;
+}
 
-  const runtimeUrl = `${GUEST_APP_RUNTIME_URL}/initial-data/${encodeURIComponent(
+async function fetchRuntimeStatus(
+  reservationId: string,
+  dynamicVar: string,
+  jwt: string,
+): Promise<number> {
+  const url = `${GUEST_APP_RUNTIME_URL}/initial-data/${encodeURIComponent(
     reservationId,
   )}/${encodeURIComponent(dynamicVar)}`;
-  const runtimeRes = await fetch(runtimeUrl, {
+  const res = await fetch(url, {
     headers: { Authorization: `Bearer ${jwt}`, Accept: 'application/json' },
     cache: 'no-store',
   });
-  if (runtimeRes.status === 404) throw new GuestAppNotProvisionedError(reasonForCheckIn(), checkIn);
-  if (!runtimeRes.ok) {
-    const body = await runtimeRes.text();
-    throw new GuestyError(
-      runtimeRes.status,
-      body,
-      `Guesty guest-app /initial-data -> ${runtimeRes.status}`,
-    );
+  return res.status;
+}
+
+/**
+ * Resolve the `dynamicVar` token used by Guesty's guest-app for a given
+ * reservation. Verifies the runtime is live before returning. If the
+ * runtime is unprovisioned, posts a merge-tag internal note to publish
+ * it and retries with a short backoff. Throws GuestAppNotProvisionedError
+ * if the retries don't succeed.
+ */
+export async function resolveGuestAppToken(
+  reservationId: string,
+  accountSlug: string,
+): Promise<string> {
+  const dynamicVar = Buffer.from(`{{guest_app::${accountSlug}}}`).toString('base64');
+
+  const jwt = await loginToGuestApp(reservationId, dynamicVar);
+  if (!jwt) throw new GuestAppNotProvisionedError();
+
+  let status = await fetchRuntimeStatus(reservationId, dynamicVar, jwt);
+  if (status === 200) return dynamicVar;
+  if (status !== 404) {
+    throw new GuestyError(status, '', `Guesty guest-app /initial-data -> ${status}`);
   }
 
-  return dynamicVar;
+  // Runtime not published yet — kick Guesty to publish it, then retry.
+  await publishGuestAppRuntime(reservationId, accountSlug);
+  for (const delay of RUNTIME_RETRY_DELAYS_MS) {
+    await new Promise((r) => setTimeout(r, delay));
+    status = await fetchRuntimeStatus(reservationId, dynamicVar, jwt);
+    if (status === 200) return dynamicVar;
+    if (status !== 404) {
+      throw new GuestyError(status, '', `Guesty guest-app /initial-data -> ${status}`);
+    }
+  }
+  throw new GuestAppNotProvisionedError();
 }

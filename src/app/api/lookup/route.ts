@@ -12,23 +12,8 @@ export const dynamic = 'force-dynamic';
 const CODE_RE = /^[A-Za-z0-9_-]{4,64}$/;
 
 const NOT_FOUND_MSG = "We couldn't find that reservation. Double-check the code and try again.";
-const NOT_PROVISIONED_UNPUBLISHED_MSG =
-  "We found your reservation, but your guest portal isn't ready yet. Please contact your host to publish the guest app for this stay.";
-
-function tooFarOutMessage(checkIn?: string): string {
-  if (checkIn) {
-    const t = Date.parse(checkIn);
-    if (!Number.isNaN(t)) {
-      const formatted = new Date(t).toLocaleDateString('en-US', {
-        month: 'long',
-        day: 'numeric',
-        year: 'numeric',
-      });
-      return `We found your reservation for ${formatted}. Your guest portal opens about a week before check-in — please come back then.`;
-    }
-  }
-  return 'We found your reservation. Your guest portal opens about a week before check-in — please come back then.';
-}
+const NOT_PROVISIONED_MSG =
+  "We found your reservation, but your guest portal isn't ready yet. Please contact your host.";
 
 export async function POST(req: Request) {
   let body: { code?: string };
@@ -58,14 +43,12 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: NOT_FOUND_MSG }, { status: 404 });
     }
 
-    const dynamicVar = await resolveGuestAppToken(id, accountSlug, reservation.checkIn);
+    const dynamicVar = await resolveGuestAppToken(id, accountSlug);
     const url = buildGuestAppUrl(id, dynamicVar);
     return NextResponse.json({ ok: true, url });
   } catch (e) {
     if (e instanceof GuestAppNotProvisionedError) {
-      const error =
-        e.reason === 'too-far-out' ? tooFarOutMessage(e.checkIn) : NOT_PROVISIONED_UNPUBLISHED_MSG;
-      return NextResponse.json({ ok: false, error }, { status: 503 });
+      return NextResponse.json({ ok: false, error: NOT_PROVISIONED_MSG }, { status: 503 });
     }
     console.error('lookup failed', e);
     if (e instanceof GuestyError && (e.status === 404 || e.status === 410 || e.status === 400)) {
