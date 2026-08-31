@@ -13,7 +13,7 @@ const CODE_RE = /^[A-Za-z0-9_-]{4,64}$/;
 
 const NOT_FOUND_MSG = "We couldn't find that reservation. Double-check the code and try again.";
 const NOT_PROVISIONED_MSG =
-  "We found your reservation, but your guest portal isn't ready yet. Please contact your host.";
+  "We found your reservation, but your guest portal isn't ready yet. Please contact your host at cs@fidumcompany.com.";
 
 export async function POST(req: Request) {
   let body: { code?: string };
@@ -56,7 +56,7 @@ export async function POST(req: Request) {
     }
     if (e instanceof Error && /GUESTY_OPEN_API/.test(e.message)) {
       return NextResponse.json(
-        { ok: false, error: 'Reservation lookup is temporarily unavailable. Please contact your host.' },
+        { ok: false, error: 'Reservation lookup is temporarily unavailable. Please contact your host at cs@fidumcompany.com.' },
         { status: 503 },
       );
     }
